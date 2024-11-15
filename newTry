@@ -1,0 +1,234 @@
+#include <iostream>
+#include <vector>
+#include <queue>
+#include <fstream>
+#include <algorithm>
+
+class Node;  // Forward declaration
+
+class Edge {
+public:
+    Node* to;
+    Node* from;
+    Edge* reverse;
+    int original;
+    int residual;
+    int index;
+
+    Edge(Node* fromNode, Node* toNode, int orig, int resid, int idx)
+        : from(fromNode), to(toNode), reverse(nullptr), original(orig), residual(resid), index(idx) {}
+
+    void setReverseEdge(Edge* revEdge) {
+        reverse = revEdge;
+    }
+};
+
+class Node {
+public:
+    int id;
+    enum NodeType {source, sink, dice, word};
+    NodeType type;
+    int visited;
+    std::vector<Edge*> adj;
+    Edge* backedge;
+
+    Node(int nodeId, NodeType t) : id(nodeId), type(t), visited(0), backedge(nullptr) {}
+};
+
+class Graph {
+public:
+    std::vector<Node*> nodes;
+    int minNodes;
+    std::vector<int> spellingids;
+
+    Graph() : minNodes(0) {}
+
+    // BFS to find a path from source to sink, modifying parent array to track the path
+    bool BFS(Node* source, Node* sink, std::vector<Edge*>& path) {
+        std::queue<Node*> q;
+        std::vector<int> visited(nodes.size(), 0);
+        std::vector<Edge*> parent(nodes.size(), nullptr);
+
+        q.push(source);
+        visited[source->id] = 1;
+
+        while (!q.empty()) {
+            Node* current = q.front();
+            q.pop();
+
+            for (Edge* edge : current->adj) {
+                if (!visited[edge->to->id] && edge->original == 1) {
+                    visited[edge->to->id] = 1;
+                    parent[edge->to->id] = edge;
+
+                    if (edge->to == sink) {
+                        // Reconstruct the path from sink to source
+                        path.clear();
+                        for (Edge* e = edge; e != nullptr; e = parent[e->from->id]) {
+                            path.push_back(e);
+                        }
+                        std::reverse(path.begin(), path.end());
+                        return true;
+                    }
+                    q.push(edge->to);
+                }
+            }
+        }
+        return false;
+    }
+
+    // canISpell repeatedly calls BFS until no more paths are found
+    bool canISpell(Node* source, Node* sink) {
+        std::vector<Edge*> path;
+
+        while (BFS(source, sink, path)) {
+            // Modify the path found by BFS
+            for (Edge* edge : path) {
+                edge->original = 0; // Mark the forward edge as used
+                edge->residual = 1; // Enable the reverse edge
+
+                // Update the reverse edge
+                edge->reverse->original = 1;
+                edge->reverse->residual = 0;
+            }
+        }
+
+       spellingids.clear();  // Clear spellingids to start fresh for each word check
+
+for (Node* node : nodes) {
+    if (node->type == word) {  // Check only word nodes
+        bool canReachSink = false;
+
+        // Check if this word node has an edge to the sink with residual = 1
+        for (Edge* edge : node->adj) {
+            if (edge->to->type == sink && edge->residual == 1) {
+                canReachSink = true;
+                spellingids.push_back(node->id);  // Add to spellingids since it can reach the sink
+                break;
+            }
+        }
+
+        // If any word node doesn't have a valid path to the sink, we can't spell the word
+        if (!canReachSink) {
+            return false;  // Early exit if any word node cannot reach the sink with residual = 1
+        }
+    }
+}
+
+// If we reach here, all word nodes had paths to the sink with residual = 1
+return spellingids.size() == minNodes;
+    }
+
+    void DeleteHalfGraph() {
+        int half = nodes.size() / 2;
+        for (int i = half; i < nodes.size(); ++i) {
+            delete nodes[i];
+        }
+        nodes.erase(nodes.begin() + half, nodes.end());
+    }
+
+    void addNode(Node* node) {
+        nodes.push_back(node);
+    }
+};
+
+int main(int argc, char* argv[]) {
+    if (argc < 3) {
+        std::cerr << "Usage: " << argv[0] << " <diceFile> <wordFile>" << std::endl;
+        return 1;
+    }
+
+    std::string diceFile = argv[1];
+    std::string wordFile = argv[2];
+
+    Graph g;
+
+    // Create the source node first and add it to the graph
+    Node* sourceNode = new Node(g.nodes.size(), Node::source);
+    g.addNode(sourceNode);
+
+    // Load dice file (arg 1)
+    std::ifstream diceStream(diceFile);
+    if (!diceStream) {
+        std::cerr << "Error opening dice file!" << std::endl;
+        return 1;
+    }
+
+    std::string line;
+    while (getline(diceStream, line)) {
+        // Add dice nodes to graph
+        Node* diceNode = new Node(g.nodes.size(), Node::dice);
+        g.addNode(diceNode);
+
+        // Create edge from source to dice node (forward edge)
+        Edge* forwardEdge = new Edge(sourceNode, diceNode, 1, 0, 0);
+        // Create reverse edge from dice node to source (reverse edge)
+        Edge* reverseEdge = new Edge(diceNode, sourceNode, 0, 1, 0);
+        forwardEdge->setReverseEdge(reverseEdge);
+        reverseEdge->setReverseEdge(forwardEdge);
+        
+        // Add edges to the nodes' adjacency lists
+        sourceNode->adj.push_back(forwardEdge);
+        diceNode->adj.push_back(reverseEdge);
+    }
+    diceStream.close();
+
+    // Load word file (arg 2)
+    std::ifstream wordStream(wordFile);
+    if (!wordStream) {
+        std::cerr << "Error opening word file!" << std::endl;
+        return 1;
+    }
+
+    while (getline(wordStream, line)) {
+        int wordNodeStart = g.nodes.size();
+
+        // Add nodes for each letter in the word
+        for (size_t i = 0; i < line.length(); ++i) {
+            char letter = line[i];
+            Node* letterNode = new Node(g.nodes.size(), Node::word);
+            g.addNode(letterNode);
+
+            // Create edges from dice nodes to word nodes based on dice content
+            for (int diceIndex = 1; diceIndex < g.nodes.size(); ++diceIndex) {
+                if (diceIndex < g.nodes.size() - 1 && // Ensuring dice nodes exist before word nodes
+                    line.find(g.nodes[diceIndex]->id) != std::string::npos) {
+                    g.nodes[diceIndex]->adj.push_back(new Edge(g.nodes[diceIndex], letterNode, 1, 0, 0));
+                    letterNode->adj.push_back(new Edge(letterNode, g.nodes[diceIndex], 0, 1, 0));
+                }
+            }
+        }
+
+        // Add sink node for the word
+        Node* sinkNode = new Node(g.nodes.size(), Node::sink);
+        g.addNode(sinkNode);
+
+        // Create edges from word nodes to sink node
+        for (int i = wordNodeStart; i < g.nodes.size(); ++i) {
+            g.nodes[i]->adj.push_back(new Edge(g.nodes[i], sinkNode, 1, 0, 0));
+            sinkNode->adj.push_back(new Edge(sinkNode, g.nodes[i], 0, 1, 0));
+        }
+
+        // Check if we can spell this word
+        bool canSpell = g.canISpell(sourceNode, sinkNode);
+        if (canSpell) {
+            std::cout << "Can spell the word: " << line << std::endl;
+        } else {
+            std::cout << "Cannot spell the word: " << line << std::endl;
+        }
+
+        // Clean up word nodes
+        while (g.nodes.size() > wordNodeStart) {
+            delete g.nodes.back();
+            g.nodes.pop_back();
+        }
+    }
+    wordStream.close();
+
+    // Optionally, clean up the entire graph
+    for (Node* node : g.nodes) {
+        delete node;
+    }
+
+    return 0;
+}
